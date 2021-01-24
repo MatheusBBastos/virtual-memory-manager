@@ -20,13 +20,13 @@ struct Memory {
 
 /// Estrutura usada para mapear uma página a um frame
 struct Entry {
-    pg_num: u32,
-    frame_num: u32,
+    pg_num: usize,
+    frame_num: usize,
 }
 
 /// Estrutura que representa uma tabela de páginas
 struct PageTable {
-    frame_nums: [Option<u32>; NUM_PAGES],
+    frame_nums: [Option<usize>; NUM_PAGES],
     swap_queue: VecDeque<Entry>,
 }
 
@@ -49,7 +49,7 @@ impl Memory {
     }
 
     /// Consulta o TLB, retornando o frame correspondente se a página estiver armazenada nele
-    fn consult_tlb(&self, pg_num: u32) -> Option<u32> {
+    fn consult_tlb(&self, pg_num: usize) -> Option<usize> {
         for tlb_entry in self.tlb.iter() {
             if tlb_entry.pg_num == pg_num {
                 return Some(tlb_entry.frame_num);
@@ -60,7 +60,7 @@ impl Memory {
     }
 
     /// Insere um mapeamento página-frame no TLB
-    fn update_tlb(&mut self, pg_num: u32, frame_num: u32) {
+    fn update_tlb(&mut self, pg_num: usize, frame_num: usize) {
         if self.tlb.len() == TLB_ENTRIES {
             // Fila do TLB está cheia, remover página mais antiga (inserida antes)
             self.tlb.pop_front();
@@ -74,10 +74,10 @@ impl Memory {
     }
 
     /// Lê a página `pg_num` do arquivo `bck_store` e a armazena no frame `frame_num`
-    fn read_from_file(&mut self, pg_num: u32, frame_num: usize, bck_store: &mut File) {
+    fn read_from_file(&mut self, pg_num: usize, frame_num: usize, bck_store: &mut File) {
         let frame_end = frame_num + PAGE_SIZE;
 
-        bck_store.seek(SeekFrom::Start((pg_num * PAGE_SIZE as u32) as u64))
+        bck_store.seek(SeekFrom::Start((pg_num * PAGE_SIZE) as u64))
             .expect("Falha ao posicionar cursor no arquivo");
         bck_store.read(&mut self.data[frame_num..frame_end])
             .expect("Falha ao ler arquivo");
@@ -86,15 +86,16 @@ impl Memory {
     /// Consulta a memória usando o endereço virtual `virtual_addr` e o arquivo
     /// `bck_store` como base
     pub fn query(&mut self, virtual_addr: u32, bck_store: &mut File) -> QueryResult {
+        let virtual_addr = virtual_addr as usize;
         // Extrair os 8 primeiros bits do endereço (número da página)
         let pg_num = virtual_addr >> 8;
         // Extrair os 8 últimos bits do endereço (deslocamento)
-        let offset = (virtual_addr & 0xFF) as usize;
+        let offset = virtual_addr & 0xFF;
 
         if let Some(frame_num) = self.consult_tlb(pg_num) {
             // TLB hit
 
-            let physical_addr = frame_num as usize + offset;
+            let physical_addr = frame_num + offset;
                 
             QueryResult {
                 physical_addr,
@@ -102,12 +103,12 @@ impl Memory {
                 tlb_hit: true,
                 value: self.data[physical_addr] as i8,
             }
-        } else if let Some(frame_num) = self.page_table.frame_nums[pg_num as usize] {
+        } else if let Some(frame_num) = self.page_table.frame_nums[pg_num] {
             // Page hit
 
-            self.update_tlb(pg_num, frame_num as u32);
+            self.update_tlb(pg_num, frame_num);
 
-            let physical_addr = frame_num as usize + offset;
+            let physical_addr = frame_num + offset;
 
             QueryResult {
                 physical_addr,
@@ -118,9 +119,9 @@ impl Memory {
         } else {
             // Page miss
 
-            let frame_num = self.page_table.get_frame_num(pg_num);
+            let frame_num = self.page_table.get_next_frame_num(pg_num);
 
-            self.update_tlb(pg_num, frame_num as u32);
+            self.update_tlb(pg_num, frame_num);
             self.read_from_file(pg_num, frame_num, bck_store);
 
             let physical_addr = frame_num + offset;
@@ -145,18 +146,18 @@ impl PageTable {
     }
 
     /// Obtém o número do frame correspondente à página `pg_num`
-    pub fn get_frame_num(&mut self, pg_num: u32) -> usize {
+    pub fn get_next_frame_num(&mut self, pg_num: usize) -> usize {
         let frame_num = if self.swap_queue.len() == NUM_FRAMES {
             // Memória está cheia, remover página mais antiga e usar o seu frame
             let swapped_page = self.swap_queue.pop_front().unwrap();
-            self.frame_nums[swapped_page.pg_num as usize] = None;
-            swapped_page.frame_num as usize
+            self.frame_nums[swapped_page.pg_num] = None;
+            swapped_page.frame_num
         } else {
             self.swap_queue.len() * PAGE_SIZE
         };
 
-        self.swap_queue.push_back(Entry { pg_num, frame_num: frame_num as u32});
-        self.frame_nums[pg_num as usize] = Some(frame_num as u32);
+        self.swap_queue.push_back(Entry { pg_num, frame_num: frame_num });
+        self.frame_nums[pg_num] = Some(frame_num);
 
         frame_num
     }
